@@ -12,7 +12,9 @@ const EvaluateSchema = z.object({
     operator: z.enum(OPERATORS),
     value: z.number(),
   }),
-  input: z.record(z.number()),
+  encryptedData: z.record(z.string()),
+  iv: z.string(),
+  key: z.string(),
 });
 
 policyRouter.post("/evaluate", async (req, res) => {
@@ -21,15 +23,7 @@ policyRouter.post("/evaluate", async (req, res) => {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
 
-  const { policy, input } = parsed.data;
-
-  // Simulate client-side encryption: base64-encode each numeric field value
-  // before handing it to the MXE compute boundary.
-  const encryptedData: Record<string, string> = {};
-  for (const [key, val] of Object.entries(input)) {
-    encryptedData[key] = Buffer.from(String(val), "utf8").toString("base64");
-  }
-
-  const result = await runMxeCompute({ encryptedData, policy });
+  const { policy, encryptedData, iv, key } = parsed.data;
+  const result = await runMxeCompute({ encryptedData, iv, key, policy });
   return res.json(result);
 });
