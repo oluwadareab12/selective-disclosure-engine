@@ -1,65 +1,141 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
+
+type Operator = ">=" | "<=" | ">" | "<" | "==";
+
+interface PolicyOption {
+  label: string;
+  field: string;
+  operator: Operator;
+  value: number;
+}
+
+const POLICIES: PolicyOption[] = [
+  { label: "Age ≥ 18",        field: "age",    operator: ">=", value: 18 },
+  { label: "Age ≥ 21",        field: "age",    operator: ">=", value: 21 },
+  { label: "Salary > 50,000",  field: "salary", operator: ">",  value: 50000 },
+  { label: "Salary > 100,000", field: "salary", operator: ">",  value: 100000 },
+];
 
 export default function Home() {
+  const [age, setAge]               = useState("");
+  const [salary, setSalary]         = useState("");
+  const [policyIdx, setPolicyIdx]   = useState(0);
+  const [result, setResult]         = useState<boolean | null>(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    const { field, operator, value } = POLICIES[policyIdx];
+
+    try {
+      const res = await fetch("http://localhost:4000/policy/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          policy: { field, operator, value },
+          input: { age: Number(age), salary: Number(salary) },
+        }),
+      });
+
+      if (!res.ok) throw new Error(`Server responded with ${res.status}`);
+
+      const data = await res.json();
+      setResult(data.result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Request failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <main className="min-h-screen bg-zinc-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-sm bg-white rounded-2xl border border-zinc-200 shadow-sm p-8">
+        <h1 className="text-lg font-semibold text-zinc-900 mb-6">
+          Policy Evaluator
+        </h1>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">
+              Age
+            </label>
+            <input
+              type="number"
+              required
+              min={0}
+              value={age}
+              onChange={(e) => setAge(e.target.value)}
+              placeholder="e.g. 25"
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">
+              Salary
+            </label>
+            <input
+              type="number"
+              required
+              min={0}
+              value={salary}
+              onChange={(e) => setSalary(e.target.value)}
+              placeholder="e.g. 60000"
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-sm font-medium text-zinc-700">
+              Policy
+            </label>
+            <select
+              value={policyIdx}
+              onChange={(e) => setPolicyIdx(Number(e.target.value))}
+              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900"
+            >
+              {POLICIES.map((p, i) => (
+                <option key={i} value={i}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50"
           >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+            {loading ? "Evaluating…" : "Evaluate"}
+          </button>
+        </form>
+
+        {error && (
+          <p className="mt-6 text-sm text-red-500">{error}</p>
+        )}
+
+        {result !== null && error === null && (
+          <div className="mt-8 flex flex-col items-center gap-1">
+            <span className="text-5xl">{result ? "✅" : "❌"}</span>
+            <span
+              className={`text-2xl font-semibold ${
+                result ? "text-green-600" : "text-red-600"
+              }`}
+            >
+              {result ? "true" : "false"}
+            </span>
+          </div>
+        )}
+      </div>
+    </main>
   );
 }

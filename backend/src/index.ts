@@ -2,7 +2,7 @@ import express from "express";
 import { policyRouter } from "./routes/policy";
 
 const app = express();
-const PORT = process.env.PORT ?? 3001;
+const PORT = process.env.PORT ?? 4000;
 
 app.use(express.json());
 app.use("/policy", policyRouter);
