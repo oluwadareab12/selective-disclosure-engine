@@ -106,7 +106,7 @@ async function encryptFields(
     await crypto.subtle.exportKey("raw", browserKP.publicKey)
   );
 
-  return { encryptedData, iv: bufToB64(ivBytes), clientPublicKey };
+  return { encryptedData, iv: bufToB64(ivBytes.buffer), clientPublicKey };
 }
 
 // ── Policy evaluator (mirrors backend/src/engine/policyEvaluator.ts) ─────────
