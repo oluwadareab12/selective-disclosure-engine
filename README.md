@@ -126,6 +126,23 @@ npx vercel --prod
 
 To run the full stack locally (frontend + backend), follow the steps in the **Running locally** section above.
 
+## SDK
+
+`sdk/` is a standalone package (`@sde/core`) that exposes the policy engine as a runtime-agnostic primitive. Drop it into any confidential compute environment — MXE, TEE, or local — and evaluate structured disclosure policies without modification.
+
+```ts
+import { createHash } from "node:crypto";
+import { evaluatePolicy, hashPolicy } from "@sde/core";
+
+const policy = { field: "age", operator: ">=" as const, value: 18 };
+const result = evaluatePolicy(policy, { age: 25 });
+const hash   = await hashPolicy(policy, d => Promise.resolve(
+  createHash("sha256").update(d).digest("hex")
+));
+```
+
+See [`sdk/README.md`](sdk/README.md) for browser usage, composite policies, and output type examples.
+
 ## Plugging in the real Arcium SDK
 
 Open `mxe/src/compute.ts`. The integration point is the `runMxeCompute` function. The comment block at the top of that file documents exactly what to replace:
