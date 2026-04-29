@@ -7,6 +7,7 @@ import { useState } from "react";
 type LeafOperator = ">=" | "<=" | ">" | "<" | "==";
 type LogicOp = "AND" | "OR";
 type Mode = "single" | "multi";
+type OutputType = "boolean" | "range" | "masked";
 
 interface PolicyOption {
   label: string;
@@ -15,12 +16,13 @@ interface PolicyOption {
   value: number;
 }
 
-type LeafPolicy = { field: string; operator: LeafOperator; value: number };
+type LeafPolicy = { field: string; operator: LeafOperator; value: number; outputType?: OutputType };
 type CompositePolicy = { operator: LogicOp; policies: [LeafPolicy, LeafPolicy] };
 type Policy = LeafPolicy | CompositePolicy;
 
 interface MxeResult {
-  result: boolean;
+  result: boolean | string;
+  outputType: OutputType;
   evaluated: number;
   mxeSimulated: true;
   computedAt: string;
@@ -104,6 +106,26 @@ async function encryptFields(
   return { encryptedData, iv: bufToB64(ivBytes.buffer), clientPublicKey };
 }
 
+// ── Extended output helpers (mirrors backend/src/engine/policyEvaluator.ts) ──
+
+const SALARY_BRACKETS = [
+  { max: 50_000,  label: "0–50k" },
+  { max: 100_000, label: "50k–100k" },
+  { max: 250_000, label: "100k–250k" },
+];
+
+function salaryRange(value: number): string {
+  for (const b of SALARY_BRACKETS) {
+    if (value <= b.max) return b.label;
+  }
+  return "250k+";
+}
+
+function maskValue(value: number): string {
+  const s = String(Math.floor(value));
+  return s[0] + "*".repeat(s.length - 1);
+}
+
 // ── Policy evaluator (mirrors backend/src/engine/policyEvaluator.ts) ─────────
 
 const COMPARATORS: Record<LeafOperator, (a: number, b: number) => boolean> = {
@@ -114,23 +136,34 @@ const COMPARATORS: Record<LeafOperator, (a: number, b: number) => boolean> = {
   "==": (a, b) => a === b,
 };
 
+function evalLeafBoolean(policy: LeafPolicy, input: Record<string, number>): boolean {
+  const raw = input[policy.field];
+  if (raw === undefined) return false;
+  return COMPARATORS[policy.operator](raw, policy.value);
+}
+
 function evaluatePolicyLocal(
   policy: Policy,
   input: Record<string, number>
-): { result: boolean; evaluated: number } {
+): { result: boolean | string; outputType: OutputType; evaluated: number } {
   if ("policies" in policy) {
     let result = policy.operator === "AND";
     let evaluated = 0;
     for (const child of policy.policies) {
-      const r = evaluatePolicyLocal(child, input);
-      evaluated += r.evaluated;
-      result = policy.operator === "AND" ? result && r.result : result || r.result;
+      const childBool = evalLeafBoolean(child, input);
+      evaluated += 1;
+      result = policy.operator === "AND" ? result && childBool : result || childBool;
     }
-    return { result, evaluated };
+    return { result, outputType: "boolean", evaluated };
   }
+
   const raw = input[policy.field];
-  if (raw === undefined) return { result: false, evaluated: 1 };
-  return { result: COMPARATORS[policy.operator](raw, policy.value), evaluated: 1 };
+  if (raw === undefined) return { result: false, outputType: "boolean", evaluated: 1 };
+
+  const outputType = policy.outputType ?? "boolean";
+  if (outputType === "range")  return { result: salaryRange(raw), outputType: "range",  evaluated: 1 };
+  if (outputType === "masked") return { result: maskValue(raw),   outputType: "masked", evaluated: 1 };
+  return { result: COMPARATORS[policy.operator](raw, policy.value), outputType: "boolean", evaluated: 1 };
 }
 
 // ── Mock MXE compute (replaces fetch to backend in demo mode) ─────────────────
@@ -178,8 +211,8 @@ async function mockMxeEvaluate(
     decrypted[field] = Number(new TextDecoder().decode(plaintext));
   }
 
-  const { result, evaluated } = evaluatePolicyLocal(policy, decrypted);
-  return { result, evaluated, mxeSimulated: true, computedAt: new Date().toISOString() };
+  const { result, outputType, evaluated } = evaluatePolicyLocal(policy, decrypted);
+  return { result, outputType, evaluated, mxeSimulated: true, computedAt: new Date().toISOString() };
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -211,6 +244,38 @@ function PolicySelect({
   );
 }
 
+function OutputTypeSelect({
+  value,
+  onChange,
+}: {
+  value: OutputType;
+  onChange: (t: OutputType) => void;
+}) {
+  return (
+    <div className="mt-2.5">
+      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-700">
+        Output type
+      </label>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value as OutputType)}
+          className="w-full cursor-pointer appearance-none rounded-xl border border-white/[0.05] bg-black/20 px-4 py-2.5 pr-10 text-xs text-zinc-400 transition-all duration-200 focus:border-cyan-500/30 focus:outline-none [&>option]:bg-[#0d1525] [&>option]:text-white"
+        >
+          <option value="boolean">Boolean — true / false</option>
+          <option value="range">Range — salary bracket</option>
+          <option value="masked">Masked — first digit only</option>
+        </select>
+        <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+          <svg className="h-3.5 w-3.5 text-zinc-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -220,7 +285,10 @@ export default function Home() {
   const [policyIdx, setPolicyIdx]   = useState(0);
   const [policyIdx2, setPolicyIdx2] = useState(2);
   const [logicOp, setLogicOp]       = useState<LogicOp>("AND");
-  const [result, setResult]         = useState<boolean | null>(null);
+  const [outputType1, setOutputType1] = useState<OutputType>("boolean");
+  const [outputType2, setOutputType2] = useState<OutputType>("boolean");
+  const [result, setResult]         = useState<boolean | string | null>(null);
+  const [resultOutputType, setResultOutputType] = useState<OutputType>("boolean");
   const [evaluated, setEvaluated]   = useState<number | null>(null);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
@@ -229,6 +297,7 @@ export default function Home() {
     setResult(null);
     setEvaluated(null);
     setError(null);
+    setResultOutputType("boolean");
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -253,9 +322,10 @@ export default function Home() {
       );
 
       const leaf1: LeafPolicy = {
-        field:    POLICIES[policyIdx].field,
-        operator: POLICIES[policyIdx].operator,
-        value:    POLICIES[policyIdx].value,
+        field:      POLICIES[policyIdx].field,
+        operator:   POLICIES[policyIdx].operator,
+        value:      POLICIES[policyIdx].value,
+        outputType: mode === "single" ? outputType1 : "boolean",
       };
       const policy: Policy =
         mode === "single"
@@ -268,6 +338,7 @@ export default function Home() {
                   field:    POLICIES[policyIdx2].field,
                   operator: POLICIES[policyIdx2].operator,
                   value:    POLICIES[policyIdx2].value,
+                  outputType: "boolean",
                 },
               ],
             };
@@ -279,6 +350,7 @@ export default function Home() {
       );
 
       setResult(data.result);
+      setResultOutputType(data.outputType);
       setEvaluated(data.evaluated);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Evaluation failed");
@@ -286,6 +358,16 @@ export default function Home() {
       setLoading(false);
     }
   }
+
+  // Determine result card colour theme
+  const cardTheme =
+    resultOutputType === "range"
+      ? { border: "border-purple-500/20", bg: "bg-purple-500/[0.04]", shadow: "shadow-[0_0_90px_rgba(168,85,247,0.11)]", badge: "border-purple-500/20 bg-purple-500/[0.07] text-purple-500/60" }
+      : resultOutputType === "masked"
+      ? { border: "border-amber-500/20",  bg: "bg-amber-500/[0.04]",  shadow: "shadow-[0_0_90px_rgba(245,158,11,0.11)]",  badge: "border-amber-500/20  bg-amber-500/[0.07]  text-amber-500/60"  }
+      : result
+      ? { border: "border-green-500/20",  bg: "bg-green-500/[0.04]",  shadow: "shadow-[0_0_90px_rgba(34,197,94,0.11)]",   badge: "border-green-500/20  bg-green-500/[0.07]  text-green-500/60"  }
+      : { border: "border-red-500/20",    bg: "bg-red-500/[0.04]",    shadow: "shadow-[0_0_90px_rgba(239,68,68,0.11)]",   badge: "border-red-500/20    bg-red-500/[0.07]    text-red-500/60"    };
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-[#020817] text-white">
@@ -440,6 +522,7 @@ export default function Home() {
                     Condition
                   </label>
                   <PolicySelect value={policyIdx} onChange={(i) => { setPolicyIdx(i); clearResult(); }} />
+                  <OutputTypeSelect value={outputType1} onChange={(t) => { setOutputType1(t); clearResult(); }} />
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -516,29 +599,40 @@ export default function Home() {
         {/* ── Result card ── */}
         {result !== null && error === null && (
           <div
-            className={`mt-5 w-full rounded-2xl border p-10 text-center backdrop-blur-sm transition-all duration-500 ${
-              result
-                ? "border-green-500/20 bg-green-500/[0.04] shadow-[0_0_90px_rgba(34,197,94,0.11)]"
-                : "border-red-500/20 bg-red-500/[0.04] shadow-[0_0_90px_rgba(239,68,68,0.11)]"
-            }`}
+            className={`mt-5 w-full rounded-2xl border p-10 text-center backdrop-blur-sm transition-all duration-500 ${cardTheme.border} ${cardTheme.bg} ${cardTheme.shadow}`}
           >
-            <div className="mb-4 text-6xl sm:text-7xl">{result ? "✅" : "❌"}</div>
-
-            <div className={`mb-2 text-4xl font-bold sm:text-5xl ${result ? "text-green-400" : "text-red-400"}`}>
-              {result ? "true" : "false"}
-            </div>
+            {resultOutputType === "boolean" ? (
+              <>
+                <div className="mb-4 text-6xl sm:text-7xl">{result ? "✅" : "❌"}</div>
+                <div className={`mb-2 text-4xl font-bold sm:text-5xl ${result ? "text-green-400" : "text-red-400"}`}>
+                  {result ? "true" : "false"}
+                </div>
+              </>
+            ) : resultOutputType === "range" ? (
+              <>
+                <div className="mb-5 text-5xl">📊</div>
+                <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-purple-500/30 bg-purple-500/[0.12] px-7 py-3 text-2xl font-bold tracking-wide text-purple-200">
+                  {result as string}
+                </div>
+                <p className="mt-3 text-sm text-zinc-600">Salary bracket</p>
+              </>
+            ) : (
+              <>
+                <div className="mb-5 text-5xl">🎭</div>
+                <div className="mb-2 font-mono text-4xl font-bold tracking-[0.25em] text-amber-300 sm:text-5xl">
+                  {result as string}
+                </div>
+                <p className="mt-3 text-sm text-zinc-600">Masked value — first digit only</p>
+              </>
+            )}
 
             {evaluated !== null && (
-              <p className="mb-6 text-sm text-zinc-600">
+              <p className="mb-6 mt-4 text-sm text-zinc-600">
                 {evaluated} {evaluated === 1 ? "policy" : "policies"} evaluated
               </p>
             )}
 
-            <div className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium ${
-              result
-                ? "border-green-500/20 bg-green-500/[0.07] text-green-500/60"
-                : "border-red-500/20 bg-red-500/[0.07] text-red-500/60"
-            }`}>
+            <div className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium ${cardTheme.badge}`}>
               🔒 Encrypted with X25519 + AES-GCM-256
             </div>
           </div>

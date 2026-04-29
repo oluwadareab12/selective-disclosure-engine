@@ -43,7 +43,8 @@ export interface MxeComputeInput {
 }
 
 export interface MxeComputeOutput {
-  result: boolean;
+  result: boolean | string;
+  outputType: "boolean" | "range" | "masked";
   evaluated: number;
   computedAt: string;
   mxeSimulated: true;
@@ -127,7 +128,7 @@ export async function runMxeCompute(
     decrypted[field] = value;
   }
 
-  const { result, evaluated } = evaluatePolicy(policy, decrypted);
+  const { result, outputType, evaluated } = evaluatePolicy(policy, decrypted);
 
-  return { result, evaluated, computedAt: new Date().toISOString(), mxeSimulated: true };
+  return { result, outputType, evaluated, computedAt: new Date().toISOString(), mxeSimulated: true };
 }

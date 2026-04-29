@@ -8,9 +8,10 @@ const LEAF_OPERATORS  = [">=", "<=", ">", "<", "=="] as const;
 const LOGIC_OPERATORS = ["AND", "OR"] as const;
 
 const LeafPolicySchema = z.object({
-  field:    z.string(),
-  operator: z.enum(LEAF_OPERATORS),
-  value:    z.number(),
+  field:      z.string(),
+  operator:   z.enum(LEAF_OPERATORS),
+  value:      z.number(),
+  outputType: z.enum(["boolean", "range", "masked"]).optional(),
 });
 
 // Discriminated union: operator is the discriminant.
