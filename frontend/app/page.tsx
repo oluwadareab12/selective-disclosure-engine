@@ -55,14 +55,12 @@ async function encryptFields(
   fields: Record<string, number>,
   mxePubKeyB64: string
 ): Promise<{ encryptedData: Record<string, string>; iv: string; clientPublicKey: string }> {
-  // Generate browser's ephemeral X25519 key pair.
   const browserKP = (await crypto.subtle.generateKey(
     { name: "X25519" } as any,
     true,
     ["deriveBits"]
   )) as CryptoKeyPair;
 
-  // Import the MXE node's X25519 public key (raw 32-byte format).
   const mxePublicKey = await crypto.subtle.importKey(
     "raw",
     b64ToUint8Array(mxePubKeyB64),
@@ -71,14 +69,12 @@ async function encryptFields(
     []
   );
 
-  // ECDH: derive 256-bit shared secret.
   const sharedBits = await crypto.subtle.deriveBits(
     { name: "X25519", public: mxePublicKey } as any,
     browserKP.privateKey,
     256
   );
 
-  // HKDF-SHA-256: derive AES-GCM-256 key from the shared secret.
   const hkdfKey = await crypto.subtle.importKey(
     "raw", sharedBits, { name: "HKDF" }, false, ["deriveKey"]
   );
@@ -90,7 +86,6 @@ async function encryptFields(
     ["encrypt"]
   );
 
-  // Encrypt each field with a fresh IV.
   const ivBytes = crypto.getRandomValues(new Uint8Array(12));
   const encryptedData: Record<string, string> = {};
   for (const [field, value] of Object.entries(fields)) {
@@ -139,13 +134,6 @@ function evaluatePolicyLocal(
 }
 
 // ── Mock MXE compute (replaces fetch to backend in demo mode) ─────────────────
-//
-// Mirrors the real runMxeCompute in mxe/src/compute.ts:
-//   1. Accepts the encrypted payload and the browser's ephemeral public key.
-//   2. Performs ECDH with the mock MXE private key to derive the same shared secret.
-//   3. Derives the AES key via HKDF and decrypts each field.
-//   4. Evaluates the policy (supports composite AND/OR).
-//   5. Returns the same shape as the real endpoint.
 
 async function mockMxeEvaluate(
   encryptedData: Record<string, string>,
@@ -156,7 +144,6 @@ async function mockMxeEvaluate(
 ): Promise<MxeResult> {
   await new Promise<void>((resolve) => setTimeout(resolve, 600));
 
-  // Mirror MXE-side ECDH+HKDF key derivation.
   const clientPubKey = await crypto.subtle.importKey(
     "raw",
     b64ToUint8Array(clientPublicKey),
@@ -180,7 +167,6 @@ async function mockMxeEvaluate(
     ["decrypt"]
   );
 
-  // Decrypt each ciphertext.
   const ivBytes = b64ToUint8Array(iv);
   const decrypted: Record<string, number> = {};
   for (const [field, ctB64] of Object.entries(encryptedData)) {
@@ -196,7 +182,36 @@ async function mockMxeEvaluate(
   return { result, evaluated, mxeSimulated: true, computedAt: new Date().toISOString() };
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function PolicySelect({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (i: number) => void;
+}) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full cursor-pointer appearance-none rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-3 pr-10 text-sm text-white transition-all duration-200 focus:border-cyan-500/50 focus:bg-white/[0.06] focus:outline-none focus:shadow-[0_0_20px_rgba(6,182,212,0.12)] [&>option]:bg-[#0d1525] [&>option]:text-white"
+      >
+        {POLICIES.map((p, i) => (
+          <option key={i} value={i}>{p.label}</option>
+        ))}
+      </select>
+      <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+        <svg className="h-4 w-4 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Home() {
   const [age, setAge]               = useState("");
@@ -222,8 +237,6 @@ export default function Home() {
     clearResult();
 
     try {
-      // Generate a mock MXE X25519 key pair in-browser.
-      // In production this is the MXE node's long-term key fetched from the Arcium key registry.
       const mockMxeKP = (await crypto.subtle.generateKey(
         { name: "X25519" } as any,
         true,
@@ -234,7 +247,6 @@ export default function Home() {
         await crypto.subtle.exportKey("raw", mockMxeKP.publicKey)
       );
 
-      // Full ECDH+HKDF encryption flow — identical to the production path.
       const { encryptedData, iv, clientPublicKey } = await encryptFields(
         { age: Number(age), salary: Number(salary) },
         mockMxePubKeyB64
@@ -260,7 +272,6 @@ export default function Home() {
               ],
             };
 
-      // Mock MXE evaluation — no fetch, fully in-browser.
       const data = await mockMxeEvaluate(
         encryptedData, iv, clientPublicKey,
         mockMxeKP.privateKey,
@@ -276,123 +287,264 @@ export default function Home() {
     }
   }
 
-  const pillActive   = "bg-zinc-900 text-white";
-  const pillInactive = "bg-zinc-100 text-zinc-600 hover:bg-zinc-200";
-  const selectCls    =
-    "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900";
-
   return (
-    <main className="min-h-screen bg-zinc-50 flex flex-col items-center justify-center gap-3 p-6">
-      {/* Demo mode banner */}
-      <div className="w-full max-w-sm rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs text-amber-700">
-        ⚡ Demo mode — MXE computation simulated in browser
-      </div>
+    <div className="relative min-h-screen overflow-x-hidden bg-[#020817] text-white">
 
-      <div className="w-full max-w-sm bg-white rounded-2xl border border-zinc-200 shadow-sm p-8">
-        <h1 className="text-lg font-semibold text-zinc-900 mb-6">Policy Evaluator</h1>
+      {/* Ambient glow — top centre */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed left-1/2 top-0 -translate-x-1/2"
+        style={{
+          width: 900,
+          height: 600,
+          marginTop: -240,
+          background: "radial-gradient(ellipse at center, rgba(6,182,212,0.13) 0%, rgba(168,85,247,0.06) 45%, transparent 70%)",
+        }}
+      />
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-zinc-700">Age</label>
-            <input
-              type="number" required min={0}
-              value={age} onChange={(e) => { setAge(e.target.value); clearResult(); }}
-              placeholder="e.g. 25"
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900"
-            />
+      {/* Subtle dot grid */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0"
+        style={{
+          backgroundImage: "radial-gradient(circle, rgba(255,255,255,0.025) 1px, transparent 1px)",
+          backgroundSize: "36px 36px",
+        }}
+      />
+
+      {/* ── Demo bar ─────────────────────────────────────────────────────────── */}
+      <header className="sticky top-0 z-50 border-b border-white/[0.05] bg-[#020817]/75 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-5xl items-center justify-center gap-3 px-4 py-2.5 sm:gap-5">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-400 opacity-60" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-cyan-500" />
+            </span>
+            <span className="text-[11px] font-semibold text-zinc-400">Demo mode</span>
           </div>
+          <span className="text-white/[0.12]">·</span>
+          <span className="text-[11px] text-zinc-600">MXE computation simulated in browser</span>
+          <span className="hidden text-white/[0.12] sm:inline">·</span>
+          <span className="hidden text-[11px] text-zinc-700 sm:inline">No backend required</span>
+        </div>
+      </header>
 
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-zinc-700">Salary</label>
-            <input
-              type="number" required min={0}
-              value={salary} onChange={(e) => { setSalary(e.target.value); clearResult(); }}
-              placeholder="e.g. 60000"
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900"
-            />
+      {/* ── Main ─────────────────────────────────────────────────────────────── */}
+      <main className="relative mx-auto flex max-w-5xl flex-col items-center px-4 pb-28 pt-16 sm:px-6 md:pt-24">
+
+        {/* Hero */}
+        <div className="mb-14 text-center md:mb-20">
+          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/[0.07] px-4 py-1.5 text-[11px] font-medium text-cyan-400">
+            <span>🔐</span>
+            <span>Privacy-preserving policy evaluation</span>
           </div>
+          <h1 className="text-[2.8rem] font-bold leading-[1.08] tracking-tight sm:text-5xl md:text-[3.75rem]">
+            <span className="bg-gradient-to-r from-cyan-300 via-white to-purple-400 bg-clip-text text-transparent">
+              Selective Disclosure
+            </span>
+            <br />
+            <span className="text-white">Engine</span>
+          </h1>
+          <p className="mx-auto mt-4 max-w-sm text-sm leading-relaxed text-zinc-500 sm:text-[15px]">
+            Prove data properties without revealing the underlying values.
+          </p>
+        </div>
 
-          {/* Mode toggle */}
-          <div className="flex rounded-lg overflow-hidden border border-zinc-200 text-sm font-medium">
-            {(["single", "multi"] as Mode[]).map((m) => (
-              <button
-                key={m} type="button"
-                onClick={() => { setMode(m); clearResult(); }}
-                className={`flex-1 py-1.5 transition-colors ${mode === m ? pillActive : pillInactive}`}
-              >
-                {m === "single" ? "Single Policy" : "Multi Policy"}
-              </button>
-            ))}
-          </div>
+        {/* ── Form ─────────────────────────────────────────────────────────── */}
+        <form onSubmit={handleSubmit} className="w-full">
 
-          {/* Policy selector(s) */}
-          {mode === "single" ? (
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-zinc-700">Policy</label>
-              <select value={policyIdx} onChange={(e) => { setPolicyIdx(Number(e.target.value)); clearResult(); }} className={selectCls}>
-                {POLICIES.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
-              </select>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Policy 1</label>
-                <select value={policyIdx} onChange={(e) => { setPolicyIdx(Number(e.target.value)); clearResult(); }} className={selectCls}>
-                  {POLICIES.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
-                </select>
+          {/* Two-column grid */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:gap-5">
+
+            {/* ── Left card — Input Data ── */}
+            <div className="rounded-2xl border border-white/[0.07] bg-gradient-to-br from-white/[0.04] to-transparent p-6 backdrop-blur-sm">
+              <div className="mb-5 flex items-center gap-3">
+                <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+                  Input Data
+                </span>
+                <div className="h-px flex-1 bg-white/[0.05]" />
               </div>
 
-              <div className="flex items-center justify-center gap-2">
-                <div className="h-px flex-1 bg-zinc-200" />
-                <div className="flex rounded-md overflow-hidden border border-zinc-200 text-xs font-semibold">
-                  {(["AND", "OR"] as LogicOp[]).map((op) => (
-                    <button
-                      key={op} type="button"
-                      onClick={() => { setLogicOp(op); clearResult(); }}
-                      className={`px-3 py-1 transition-colors ${logicOp === op ? pillActive : pillInactive}`}
-                    >
-                      {op}
-                    </button>
-                  ))}
+              <div className="space-y-4">
+                {/* Age */}
+                <div>
+                  <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600">
+                    Age
+                  </label>
+                  <input
+                    type="number" required min={0}
+                    value={age}
+                    onChange={(e) => { setAge(e.target.value); clearResult(); }}
+                    placeholder="e.g. 25"
+                    className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-3.5 text-sm text-white placeholder:text-zinc-700 transition-all duration-200 focus:border-cyan-500/50 focus:bg-white/[0.06] focus:outline-none focus:shadow-[0_0_22px_rgba(6,182,212,0.14)]"
+                  />
                 </div>
-                <div className="h-px flex-1 bg-zinc-200" />
+
+                {/* Salary */}
+                <div>
+                  <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600">
+                    Salary
+                  </label>
+                  <input
+                    type="number" required min={0}
+                    value={salary}
+                    onChange={(e) => { setSalary(e.target.value); clearResult(); }}
+                    placeholder="e.g. 60000"
+                    className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-3.5 text-sm text-white placeholder:text-zinc-700 transition-all duration-200 focus:border-cyan-500/50 focus:bg-white/[0.06] focus:outline-none focus:shadow-[0_0_22px_rgba(6,182,212,0.14)]"
+                  />
+                </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="block text-sm font-medium text-zinc-700">Policy 2</label>
-                <select value={policyIdx2} onChange={(e) => { setPolicyIdx2(Number(e.target.value)); clearResult(); }} className={selectCls}>
-                  {POLICIES.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
-                </select>
+              {/* Footer note */}
+              <div className="mt-5 flex items-center gap-2 border-t border-white/[0.05] pt-5">
+                <svg className="h-3.5 w-3.5 shrink-0 text-cyan-500/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <span className="text-[11px] text-zinc-700">
+                  Values are encrypted before leaving your device
+                </span>
               </div>
             </div>
-          )}
 
-          <button
-            type="submit" disabled={loading}
-            className="w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50"
-          >
-            {loading ? "Evaluating…" : "Evaluate"}
-          </button>
+            {/* ── Right card — Policy ── */}
+            <div className="rounded-2xl border border-white/[0.07] bg-gradient-to-br from-white/[0.04] to-transparent p-6 backdrop-blur-sm">
+              <div className="mb-5 flex items-center gap-3">
+                <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
+                  Policy
+                </span>
+                <div className="h-px flex-1 bg-white/[0.05]" />
+              </div>
 
-          <p className="text-center text-xs text-zinc-400">🔒 Encrypted before sending</p>
+              {/* Mode toggle — sliding indicator */}
+              <div className="relative mb-5 flex rounded-xl border border-white/[0.07] bg-black/20 p-1">
+                <div
+                  className="absolute top-1 h-[calc(100%-8px)] w-[calc(50%-4px)] rounded-lg border border-cyan-500/30 bg-cyan-500/[0.12] transition-all duration-300 ease-in-out"
+                  style={{ left: mode === "multi" ? "50%" : "4px" }}
+                />
+                {(["single", "multi"] as Mode[]).map((m) => (
+                  <button
+                    key={m} type="button"
+                    onClick={() => { setMode(m); clearResult(); }}
+                    className={`relative z-10 flex-1 rounded-lg py-2.5 text-xs font-semibold tracking-wide transition-colors duration-300 ${
+                      mode === m ? "text-cyan-400" : "text-zinc-600 hover:text-zinc-400"
+                    }`}
+                  >
+                    {m === "single" ? "Single" : "Multi"}
+                  </button>
+                ))}
+              </div>
+
+              {mode === "single" ? (
+                <div>
+                  <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600">
+                    Condition
+                  </label>
+                  <PolicySelect value={policyIdx} onChange={(i) => { setPolicyIdx(i); clearResult(); }} />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600">
+                      Condition 1
+                    </label>
+                    <PolicySelect value={policyIdx} onChange={(i) => { setPolicyIdx(i); clearResult(); }} />
+                  </div>
+
+                  {/* AND / OR — sliding pill */}
+                  <div className="flex items-center gap-3">
+                    <div className="h-px flex-1 bg-white/[0.05]" />
+                    <div className="relative flex rounded-full border border-white/[0.08] bg-black/20 p-1">
+                      <div
+                        className="absolute top-1 h-[calc(100%-8px)] w-[calc(50%-4px)] rounded-full border border-purple-500/40 bg-purple-500/[0.18] transition-all duration-300 ease-in-out"
+                        style={{ left: logicOp === "OR" ? "50%" : "4px" }}
+                      />
+                      {(["AND", "OR"] as LogicOp[]).map((op) => (
+                        <button
+                          key={op} type="button"
+                          onClick={() => { setLogicOp(op); clearResult(); }}
+                          className={`relative z-10 flex-1 px-5 py-1.5 text-[11px] font-bold tracking-widest transition-colors duration-300 ${
+                            logicOp === op ? "text-purple-300" : "text-zinc-600 hover:text-zinc-400"
+                          }`}
+                        >
+                          {op}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="h-px flex-1 bg-white/[0.05]" />
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600">
+                      Condition 2
+                    </label>
+                    <PolicySelect value={policyIdx2} onChange={(i) => { setPolicyIdx2(i); clearResult(); }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Evaluate button ── */}
+          <div className="mt-4 space-y-2.5">
+            <button
+              type="submit"
+              disabled={loading}
+              className="group relative w-full overflow-hidden rounded-xl py-4 text-[13px] font-bold uppercase tracking-[0.15em] text-[#020817] transition-all duration-300 focus:outline-none disabled:cursor-not-allowed disabled:opacity-30 hover:shadow-[0_0_45px_rgba(6,182,212,0.35)]"
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-cyan-400 to-cyan-300 transition-all duration-300 group-hover:from-cyan-300 group-hover:to-cyan-200" />
+              <span className="relative flex items-center justify-center gap-2.5">
+                {loading && (
+                  <svg className="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
+                {loading ? "Evaluating policy…" : "Evaluate Policy"}
+              </span>
+            </button>
+            <p className="text-center text-[11px] text-zinc-700">🔒 Encrypted before sending</p>
+          </div>
         </form>
 
-        {error && <p className="mt-6 text-sm text-red-500">{error}</p>}
-
-        {result !== null && error === null && (
-          <div className="mt-8 flex flex-col items-center gap-1">
-            <span className="text-5xl">{result ? "✅" : "❌"}</span>
-            <span className={`text-2xl font-semibold ${result ? "text-green-600" : "text-red-600"}`}>
-              {result ? "true" : "false"}
-            </span>
-            {evaluated !== null && (
-              <span className="text-xs text-zinc-400">
-                {evaluated} {evaluated === 1 ? "policy" : "policies"} evaluated
-              </span>
-            )}
+        {/* ── Error ── */}
+        {error && (
+          <div className="mt-5 w-full rounded-xl border border-red-500/20 bg-red-500/[0.05] px-5 py-4 text-sm text-red-400">
+            {error}
           </div>
         )}
-      </div>
-    </main>
+
+        {/* ── Result card ── */}
+        {result !== null && error === null && (
+          <div
+            className={`mt-5 w-full rounded-2xl border p-10 text-center backdrop-blur-sm transition-all duration-500 ${
+              result
+                ? "border-green-500/20 bg-green-500/[0.04] shadow-[0_0_90px_rgba(34,197,94,0.11)]"
+                : "border-red-500/20 bg-red-500/[0.04] shadow-[0_0_90px_rgba(239,68,68,0.11)]"
+            }`}
+          >
+            <div className="mb-4 text-6xl sm:text-7xl">{result ? "✅" : "❌"}</div>
+
+            <div className={`mb-2 text-4xl font-bold sm:text-5xl ${result ? "text-green-400" : "text-red-400"}`}>
+              {result ? "true" : "false"}
+            </div>
+
+            {evaluated !== null && (
+              <p className="mb-6 text-sm text-zinc-600">
+                {evaluated} {evaluated === 1 ? "policy" : "policies"} evaluated
+              </p>
+            )}
+
+            <div className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium ${
+              result
+                ? "border-green-500/20 bg-green-500/[0.07] text-green-500/60"
+                : "border-red-500/20 bg-red-500/[0.07] text-red-500/60"
+            }`}>
+              🔒 Encrypted with X25519 + AES-GCM-256
+            </div>
+          </div>
+        )}
+
+      </main>
+    </div>
   );
 }
