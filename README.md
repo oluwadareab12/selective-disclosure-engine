@@ -11,34 +11,38 @@ Standard API-based eligibility checks require sending raw personal data to a ser
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Layer 1 — Input (frontend/)                                │
-│  Next.js form. User enters age + salary. Web Crypto API     │
-│  generates an ephemeral AES-GCM-256 key, encrypts each      │
-│  field, and sends ciphertext + IV + key alongside the       │
-│  policy. No plaintext leaves the browser.                   │
+│  Next.js form. User enters age + salary. Browser generates  │
+│  an ephemeral X25519 key pair, performs ECDH against the    │
+│  MXE node's public key, derives an AES-GCM-256 key via      │
+│  HKDF-SHA-256, and encrypts each field. The browser's       │
+│  ephemeral public key is sent with the request — no raw     │
+│  AES key or plaintext ever leaves the browser.              │
 └────────────────────────┬────────────────────────────────────┘
                          │  POST /policy/evaluate
-                         │  { policy, encryptedData, iv, key }
+                         │  { policy, encryptedData, iv, clientPublicKey }
 ┌────────────────────────▼────────────────────────────────────┐
 │  Layer 2 — Policy Engine (backend/)                         │
-│  Express + TypeScript. Validates the request with Zod,      │
+│  Express + TypeScript. Validates the request with Zod       │
+│  (discriminated union: leaf operators vs AND/OR),           │
 │  enforces the operator allow-list, and forwards the         │
 │  encrypted payload to the MXE compute boundary unchanged.   │
 └────────────────────────┬────────────────────────────────────┘
                          │  runMxeCompute(...)
 ┌────────────────────────▼────────────────────────────────────┐
 │  Layer 3 — MXE Compute (mxe/)                               │
-│  Simulates an Arcium MXE node. Decrypts ciphertexts with    │
-│  Node's webcrypto.subtle (AES-GCM), evaluates the policy    │
-│  operator against the plaintext value, and returns a        │
-│  boolean. In production this layer is replaced by a signed  │
-│  Arcium job submission — see mxe/src/compute.ts.            │
+│  Simulates an Arcium MXE node. Performs ECDH with the       │
+│  browser's ephemeral public key, derives the same AES key   │
+│  via HKDF, decrypts the ciphertexts, and evaluates the      │
+│  policy (supports recursive AND/OR composition). In         │
+│  production this layer is replaced by a signed Arcium job   │
+│  submission — see mxe/src/compute.ts.                       │
 └────────────────────────┬────────────────────────────────────┘
-                         │  { result, computedAt, mxeSimulated }
+                         │  { result, evaluated, computedAt, mxeSimulated }
 ┌────────────────────────▼────────────────────────────────────┐
 │  Layer 4 — Output (frontend/)                               │
-│  Displays ✅ true or ❌ false. No raw field value is        │
-│  rendered at any point in the UI or returned in any         │
-│  API response.                                              │
+│  Displays ✅ true or ❌ false and the policy count. No      │
+│  raw field value is rendered at any point in the UI or      │
+│  returned in any API response.                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,8 +78,25 @@ Content-Type: application/json
     "age":    "a3F2...base64ciphertext...==",
     "salary": "zR9m...base64ciphertext...=="
   },
-  "iv":  "dGhpcyBpcyBhbiBJVg==",
-  "key": "c2VjcmV0a2V5Zm9yZGVtb3B1cnBvc2Vz"
+  "iv":              "dGhpcyBpcyBhbiBJVg==",
+  "clientPublicKey": "x25519-ephemeral-pubkey-base64=="
+}
+```
+
+Composite policy (AND):
+
+```json
+{
+  "policy": {
+    "operator": "AND",
+    "policies": [
+      { "field": "age",    "operator": ">=", "value": 18 },
+      { "field": "salary", "operator": ">",  "value": 50000 }
+    ]
+  },
+  "encryptedData": { "age": "...", "salary": "..." },
+  "iv": "...",
+  "clientPublicKey": "..."
 }
 ```
 
@@ -84,12 +105,26 @@ Content-Type: application/json
 ```json
 {
   "result": true,
+  "evaluated": 2,
   "computedAt": "2026-04-29T14:23:01.042Z",
   "mxeSimulated": true
 }
 ```
 
-The response contains only the boolean outcome, a timestamp, and the simulation flag. The evaluated field value is never returned.
+The response contains only the boolean outcome, the count of leaf policies checked, a timestamp, and the simulation flag. No raw field value is ever returned.
+
+## Deployment
+
+The `frontend/` directory is a self-contained demo that can be deployed to Vercel without the backend. In demo mode the full X25519 key encapsulation and AES-GCM-256 encryption flow runs in the browser, and a local `mockMxeEvaluate` function simulates the MXE compute step (with a 600 ms delay) instead of calling the backend. A banner at the top of the page reads "⚡ Demo mode — MXE computation simulated in browser" so reviewers can see this immediately.
+
+To deploy the frontend standalone:
+
+```bash
+cd frontend
+npx vercel --prod
+```
+
+To run the full stack locally (frontend + backend), follow the steps in the **Running locally** section above.
 
 ## Plugging in the real Arcium SDK
 
