@@ -44,11 +44,8 @@ function bufToB64(buf: ArrayBuffer): string {
   return btoa(s);
 }
 
-function b64ToUint8Array(b64: string): Uint8Array {
-  const s = atob(b64);
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
-  return out;
+function b64ToUint8Array(b64: string) {
+  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 }
 
 const HKDF_INFO = new TextEncoder().encode("selective-disclosure-aes-key");
