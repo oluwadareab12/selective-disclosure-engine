@@ -23,6 +23,7 @@ type Policy = LeafPolicy | CompositePolicy;
 interface MxeResult {
   result: boolean | string;
   outputType: OutputType;
+  policyHash: string;
   evaluated: number;
   mxeSimulated: true;
   computedAt: string;
@@ -104,6 +105,21 @@ async function encryptFields(
   );
 
   return { encryptedData, iv: bufToB64(ivBytes.buffer), clientPublicKey };
+}
+
+// ── Canonical JSON + policy hash (mirrors backend canonicalJSON / policyHashHex) ──
+
+function canonicalJSON(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + (value as unknown[]).map(canonicalJSON).join(",") + "]";
+  const obj = value as Record<string, unknown>;
+  return "{" + Object.keys(obj).sort().map(k => JSON.stringify(k) + ":" + canonicalJSON(obj[k])).join(",") + "}";
+}
+
+async function hashPolicy(policy: Policy): Promise<string> {
+  const encoded = new TextEncoder().encode(canonicalJSON(policy));
+  const buf = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
 // ── Extended output helpers (mirrors backend/src/engine/policyEvaluator.ts) ──
@@ -212,7 +228,8 @@ async function mockMxeEvaluate(
   }
 
   const { result, outputType, evaluated } = evaluatePolicyLocal(policy, decrypted);
-  return { result, outputType, evaluated, mxeSimulated: true, computedAt: new Date().toISOString() };
+  const policyHash = await hashPolicy(policy);
+  return { result, outputType, policyHash, evaluated, mxeSimulated: true, computedAt: new Date().toISOString() };
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -289,6 +306,7 @@ export default function Home() {
   const [outputType2, setOutputType2] = useState<OutputType>("boolean");
   const [result, setResult]         = useState<boolean | string | null>(null);
   const [resultOutputType, setResultOutputType] = useState<OutputType>("boolean");
+  const [policyHash, setPolicyHash] = useState<string | null>(null);
   const [evaluated, setEvaluated]   = useState<number | null>(null);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState<string | null>(null);
@@ -296,6 +314,7 @@ export default function Home() {
   function clearResult() {
     setResult(null);
     setEvaluated(null);
+    setPolicyHash(null);
     setError(null);
     setResultOutputType("boolean");
   }
@@ -351,6 +370,7 @@ export default function Home() {
 
       setResult(data.result);
       setResultOutputType(data.outputType);
+      setPolicyHash(data.policyHash);
       setEvaluated(data.evaluated);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Evaluation failed");
@@ -627,12 +647,29 @@ export default function Home() {
             )}
 
             {evaluated !== null && (
-              <p className="mb-6 mt-4 text-sm text-zinc-600">
+              <p className="mt-4 text-sm text-zinc-600">
                 {evaluated} {evaluated === 1 ? "policy" : "policies"} evaluated
               </p>
             )}
 
-            <div className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium ${cardTheme.badge}`}>
+            {policyHash && (
+              <div className="mx-auto mt-5 mb-1 max-w-sm rounded-xl border border-white/[0.06] bg-black/20 px-4 py-3">
+                <div className="mb-1.5 flex items-center justify-center gap-1.5">
+                  <span className="text-sm">🔏</span>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600">
+                    Policy commitment
+                  </span>
+                </div>
+                <code className="block font-mono text-xs text-zinc-400 break-all">
+                  {policyHash.slice(0, 16)}&hellip;
+                </code>
+                <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-700">
+                  Hash of the policy used to produce this result — verifiable without revealing inputs.
+                </p>
+              </div>
+            )}
+
+            <div className={`mt-5 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium ${cardTheme.badge}`}>
               🔒 Encrypted with X25519 + AES-GCM-256
             </div>
           </div>

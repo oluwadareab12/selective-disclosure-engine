@@ -45,6 +45,11 @@ export interface MxeComputeInput {
 export interface MxeComputeOutput {
   result: boolean | string;
   outputType: "boolean" | "range" | "masked";
+  // SHA-256 of the canonical policy JSON (sorted keys, no whitespace), hex-encoded.
+  // In production this hash would be signed by the MXE node's attestation key (Ed25519 or
+  // ECDSA P-256), allowing any verifier to confirm that this exact result was produced from
+  // this exact policy without learning anything about the private input values.
+  policyHash: string;
   evaluated: number;
   computedAt: string;
   mxeSimulated: true;
@@ -128,7 +133,7 @@ export async function runMxeCompute(
     decrypted[field] = value;
   }
 
-  const { result, outputType, evaluated } = evaluatePolicy(policy, decrypted);
+  const { result, outputType, policyHash, evaluated } = evaluatePolicy(policy, decrypted);
 
-  return { result, outputType, evaluated, computedAt: new Date().toISOString(), mxeSimulated: true };
+  return { result, outputType, policyHash, evaluated, computedAt: new Date().toISOString(), mxeSimulated: true };
 }

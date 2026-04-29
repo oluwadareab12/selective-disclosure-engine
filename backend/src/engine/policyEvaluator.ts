@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type Operator = ">=" | "<=" | ">" | "<" | "==";
 export type LogicOperator = "AND" | "OR";
 export type OutputType = "boolean" | "range" | "masked";
@@ -19,6 +21,7 @@ export type Policy = LeafPolicy | CompositePolicy;
 export interface EvaluationResult {
   result: boolean | string;
   outputType: OutputType;
+  policyHash: string; // SHA-256 of canonical policy JSON (sorted keys, no whitespace)
   evaluated: number;
 }
 
@@ -46,6 +49,18 @@ function salaryRange(value: number): string {
 function maskValue(value: number): string {
   const s = String(Math.floor(value));
   return s[0] + "*".repeat(s.length - 1);
+}
+
+// Canonical JSON: sorted keys, no whitespace — deterministic across runtimes.
+function canonicalJSON(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + (value as unknown[]).map(canonicalJSON).join(",") + "]";
+  const obj = value as Record<string, unknown>;
+  return "{" + Object.keys(obj).sort().map(k => JSON.stringify(k) + ":" + canonicalJSON(obj[k])).join(",") + "}";
+}
+
+function policyHashHex(policy: Policy): string {
+  return createHash("sha256").update(canonicalJSON(policy)).digest("hex");
 }
 
 // Used internally for AND/OR composition — always returns a boolean regardless of outputType.
@@ -83,21 +98,23 @@ export function evaluatePolicy(
   policy: Policy,
   input: Record<string, unknown>
 ): EvaluationResult {
+  const policyHash = policyHashHex(policy);
+
   if ("policies" in policy) {
     const { result, evaluated } = evaluateComposite(policy, input);
-    return { result, outputType: "boolean", evaluated };
+    return { result, outputType: "boolean", policyHash, evaluated };
   }
 
   const raw = input[policy.field];
-  if (typeof raw !== "number") return { result: false, outputType: "boolean", evaluated: 1 };
+  if (typeof raw !== "number") return { result: false, outputType: "boolean", policyHash, evaluated: 1 };
 
   const outputType = policy.outputType ?? "boolean";
 
   if (outputType === "range") {
-    return { result: salaryRange(raw), outputType: "range", evaluated: 1 };
+    return { result: salaryRange(raw), outputType: "range", policyHash, evaluated: 1 };
   }
   if (outputType === "masked") {
-    return { result: maskValue(raw), outputType: "masked", evaluated: 1 };
+    return { result: maskValue(raw), outputType: "masked", policyHash, evaluated: 1 };
   }
-  return { result: COMPARATORS[policy.operator](raw, policy.value), outputType: "boolean", evaluated: 1 };
+  return { result: COMPARATORS[policy.operator](raw, policy.value), outputType: "boolean", policyHash, evaluated: 1 };
 }
